@@ -583,6 +583,15 @@ class AppLogic extends ChangeNotifier {
   final Map<String, List<String>> playlistItems = {}; // playlistId -> trackIds
   final List<FavoriteSegment> favoriteSegments = [];
   StreamSubscription<MediaItem?>? _mediaItemSub;
+  Timer? _dropFolderScanTimer;
+  bool _isScanningDropFolders = false;
+
+  static const Set<String> _reservedLibraryFolders = {
+    'audio',
+    'images',
+    'favorites',
+    'playlists',
+  };
 
   // Player
   late final PlayerHandler handler;
@@ -660,6 +669,7 @@ class AppLogic extends ChangeNotifier {
 
     // Restore without autoplay
     await _restorePlaybackStateWithoutAutoPlay();
+    _startAutoFolderScanner();
   }
 
   void _loadSettings() {
@@ -1031,8 +1041,36 @@ class AppLogic extends ChangeNotifier {
 
   Future<void> _normalizeDbPathsAndScanAudioFolder() async {
     await _normalizeDbPaths();
-    await _importLooseAudioFilesBesideRoot();
-    await scanAppAudioFolder();
+    await _scanDropFoldersAndAudio(reload: false);
+  }
+
+  void _startAutoFolderScanner() {
+    _dropFolderScanTimer?.cancel();
+    _dropFolderScanTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      await _scanDropFoldersAndAudio();
+    });
+  }
+
+  Future<void> _scanDropFoldersAndAudio({bool reload = true}) async {
+    if (_isScanningDropFolders) return;
+    _isScanningDropFolders = true;
+
+    var changed = false;
+    try {
+      changed = (await _importLooseAudioFilesBesideRoot()) > 0 || changed;
+      changed = (await _importLooseAudioFilesInsideRoot()) > 0 || changed;
+      changed = (await scanAppAudioFolder(reload: false)) > 0 || changed;
+      changed = (await _syncPlaylistFoldersAndImports()) || changed;
+
+      if (changed && reload) {
+        await _loadAllFromDb();
+        if (_current == null && library.isNotEmpty) {
+          await setCurrent(library.first.id, autoPlay: false);
+        }
+      }
+    } finally {
+      _isScanningDropFolders = false;
+    }
   }
 
   Future<void> _normalizeDbPaths() async {
@@ -1058,8 +1096,8 @@ class AppLogic extends ChangeNotifier {
     }
   }
 
-  Future<void> scanAppAudioFolder() async {
-    if (!await audioDir.exists()) return;
+  Future<int> scanAppAudioFolder({bool reload = true}) async {
+    if (!await audioDir.exists()) return 0;
 
     final files = audioDir
         .listSync(recursive: false, followLinks: false)
@@ -1073,18 +1111,18 @@ class AppLogic extends ChangeNotifier {
       imported += await _addAudioFileToDb(file, copyIntoAudioDir: false);
     }
 
-    if (imported > 0) {
+    if (imported > 0 && reload) {
       await _loadAllFromDb();
       if (_current == null && library.isNotEmpty) {
         await setCurrent(library.first.id, autoPlay: false);
       }
     }
+    return imported;
   }
 
-
-  Future<void> _importLooseAudioFilesBesideRoot() async {
+  Future<int> _importLooseAudioFilesBesideRoot() async {
     final dropDir = _rootDir.parent;
-    if (!await dropDir.exists()) return;
+    if (!await dropDir.exists()) return 0;
 
     final files = dropDir
         .listSync(recursive: false, followLinks: false)
@@ -1095,34 +1133,164 @@ class AppLogic extends ChangeNotifier {
 
     var imported = 0;
     for (final file in files) {
-      final stat = await file.stat();
-      final signature = '${p.basename(file.path)}::${stat.size}';
-      final existed = await _db!.query(
-        'tracks',
-        where: 'signature=?',
-        whereArgs: [signature],
-        limit: 1,
-      );
+      final trackId = await _importDropFileToAudio(file);
+      if (trackId == null) continue;
+      imported++;
+    }
 
-      if (existed.isNotEmpty) {
-        try {
-          await file.delete();
-        } catch (_) {}
-        continue;
-      }
+    return imported;
+  }
 
-      final added = await _addAudioFileToDb(file, copyIntoAudioDir: true);
-      imported += added;
-      if (added > 0) {
-        try {
-          await file.delete();
-        } catch (_) {}
+  Future<int> _importLooseAudioFilesInsideRoot() async {
+    if (!await _rootDir.exists()) return 0;
+
+    final files = _rootDir
+        .listSync(recursive: false, followLinks: false)
+        .whereType<File>()
+        .where((f) => _isAudioPath(f.path))
+        .toList()
+      ..sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+
+    var imported = 0;
+    for (final file in files) {
+      final trackId = await _importDropFileToAudio(file);
+      if (trackId == null) continue;
+      imported++;
+    }
+
+    return imported;
+  }
+
+  Future<bool> _syncPlaylistFoldersAndImports() async {
+    if (!await _rootDir.exists()) return false;
+
+    var changed = false;
+    final db = _db!;
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    final playlistMaps = await db.query('playlists', orderBy: 'createdAt DESC');
+    final folderToPlaylistId = <String, String>{};
+
+    for (final m in playlistMaps) {
+      final isSpecial = ((m['isSpecial'] as int?) ?? 0) == 1;
+      if (isSpecial) continue;
+
+      final id = m['id'] as String;
+      final name = ((m['name'] as String?) ?? '').trim();
+      if (name.isEmpty) continue;
+
+      final folderName = _safeFolderName(name);
+      final folderKey = folderName.toLowerCase();
+      folderToPlaylistId[folderKey] = id;
+
+      final dir = Directory(p.join(_rootDir.path, folderName));
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+        changed = true;
       }
     }
 
-    if (imported > 0) {
-      await _loadAllFromDb();
+    final dirs = _rootDir
+        .listSync(recursive: false, followLinks: false)
+        .whereType<Directory>()
+        .where((d) {
+          final name = p.basename(d.path).trim();
+          if (name.isEmpty || name.startsWith('.')) return false;
+          return !_reservedLibraryFolders.contains(name.toLowerCase());
+        })
+        .toList()
+      ..sort((a, b) => a.path.toLowerCase().compareTo(b.path.toLowerCase()));
+
+    for (final dir in dirs) {
+      final folderName = p.basename(dir.path).trim();
+      final folderKey = folderName.toLowerCase();
+      var playlistId = folderToPlaylistId[folderKey];
+
+      if (playlistId == null) {
+        playlistId = _uuid();
+        await db.insert('playlists', {
+          'id': playlistId,
+          'name': folderName,
+          'createdAt': now,
+          'isSpecial': 0,
+        });
+        folderToPlaylistId[folderKey] = playlistId;
+        changed = true;
+      }
+
+      final files = dir
+          .listSync(recursive: false, followLinks: false)
+          .whereType<File>()
+          .where((f) => _isAudioPath(f.path))
+          .toList()
+        ..sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+
+      for (final file in files) {
+        final trackId = await _importDropFileToAudio(file);
+        if (trackId == null) continue;
+
+        final linked = await _addTrackToPlaylistNoReload(playlistId, trackId);
+        changed = changed || linked;
+      }
     }
+
+    return changed;
+  }
+
+  Future<String?> _importDropFileToAudio(File file) async {
+    if (!await file.exists()) return null;
+    if (!_isAudioPath(file.path)) return null;
+
+    final stat = await file.stat();
+    final signature = '${p.basename(file.path)}::${stat.size}';
+
+    await _addAudioFileToDb(file, copyIntoAudioDir: true);
+
+    final found = await _db!.query(
+      'tracks',
+      where: 'signature=?',
+      whereArgs: [signature],
+      limit: 1,
+    );
+
+    if (found.isEmpty) return null;
+
+    try {
+      if (await file.exists()) await file.delete();
+    } catch (_) {}
+
+    return found.first['id'] as String;
+  }
+
+  Future<bool> _addTrackToPlaylistNoReload(String playlistId, String trackId) async {
+    final existed = await _db!.query(
+      'playlist_items',
+      where: 'playlistId=? AND trackId=?',
+      whereArgs: [playlistId, trackId],
+      limit: 1,
+    );
+    if (existed.isNotEmpty) return false;
+
+    final count = Sqflite.firstIntValue(await _db!.rawQuery(
+          'SELECT COUNT(*) FROM playlist_items WHERE playlistId=?',
+          [playlistId],
+        )) ??
+        0;
+
+    await _db!.insert('playlist_items', {
+      'playlistId': playlistId,
+      'trackId': trackId,
+      'pos': count,
+    });
+    return true;
+  }
+
+  String _safeFolderName(String value) {
+    final cleaned = value
+        .trim()
+        .replaceAll(RegExp(r'[<>:"/\\|?*]+'), '_')
+        .replaceAll(RegExp(r'\s+'), ' ');
+    return cleaned.isEmpty ? 'List' : cleaned;
   }
 
   Future<int> _addAudioFileToDb(
@@ -1519,6 +1687,8 @@ class AppLogic extends ChangeNotifier {
       createdAt: DateTime.now().millisecondsSinceEpoch,
     );
     await _db!.insert('playlists', row.toMap());
+    final dir = Directory(p.join(_rootDir.path, _safeFolderName(n)));
+    if (!await dir.exists()) await dir.create(recursive: true);
     await _loadAllFromDb();
   }
 
@@ -1530,6 +1700,14 @@ class AppLogic extends ChangeNotifier {
     await _db!.delete('playlist_items',
         where: 'playlistId=?', whereArgs: [playlistId]);
     await _db!.delete('playlists', where: 'id=?', whereArgs: [playlistId]);
+
+    final dir = Directory(p.join(_rootDir.path, _safeFolderName(pl.name)));
+    try {
+      if (await dir.exists() && dir.listSync(followLinks: false).isEmpty) {
+        await dir.delete();
+      }
+    } catch (_) {}
+
     await _loadAllFromDb();
   }
 
@@ -1970,6 +2148,7 @@ class AppLogic extends ChangeNotifier {
   @override
   void dispose() {
     _saveTimer?.cancel();
+    _dropFolderScanTimer?.cancel();
     _mediaItemSub?.cancel();
     handler.stop();
     _db?.close();
