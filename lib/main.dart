@@ -2186,6 +2186,7 @@ class _Shell extends StatelessWidget {
     ];
 
     return Scaffold(
+      extendBody: true,
       appBar: AppBar(
         title: Text(logic.settings.appTitle),
         actions: [
@@ -2197,18 +2198,14 @@ class _Shell extends StatelessWidget {
         ],
       ),
       body: pages[tab],
-      bottomNavigationBar: BottomNavigationBar(
+      bottomNavigationBar: _GlassBottomNav(
         currentIndex: tab,
         onTap: onTab,
         items: const [
-          BottomNavigationBarItem(
-              icon: Icon(Icons.home_rounded), label: 'Home'),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.favorite_rounded), label: 'Yêu thích'),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.library_music_rounded), label: 'List'),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.settings_rounded), label: 'Setting'),
+          _GlassNavItem(icon: Icons.home_rounded, label: 'Home'),
+          _GlassNavItem(icon: Icons.favorite_rounded, label: 'Yêu thích'),
+          _GlassNavItem(icon: Icons.library_music_rounded, label: 'List'),
+          _GlassNavItem(icon: Icons.settings_rounded, label: 'Setting'),
         ],
       ),
       floatingActionButton: (tab == 0)
@@ -2313,6 +2310,202 @@ class _Shell extends StatelessWidget {
   }
 }
 
+
+class _GlassNavItem {
+  final IconData icon;
+  final String label;
+
+  const _GlassNavItem({required this.icon, required this.label});
+}
+
+class _GlassBottomNav extends StatelessWidget {
+  final int currentIndex;
+  final ValueChanged<int> onTap;
+  final List<_GlassNavItem> items;
+
+  const _GlassBottomNav({
+    required this.currentIndex,
+    required this.onTap,
+    required this.items,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).padding.bottom;
+    final primary = Theme.of(context).colorScheme.primary;
+
+    return SafeArea(
+      top: false,
+      minimum: EdgeInsets.fromLTRB(
+        16,
+        0,
+        16,
+        math.max(10, bottom == 0 ? 12 : 6),
+      ),
+      child: _GlassSurface(
+        radius: 32,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        child: Row(
+          children: List.generate(items.length, (index) {
+            final item = items[index];
+            final selected = index == currentIndex;
+
+            return Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => onTap(index),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(26),
+                    color: selected
+                        ? Colors.white.withOpacity(0.16)
+                        : Colors.transparent,
+                    border: selected
+                        ? Border.all(color: Colors.white.withOpacity(0.18))
+                        : null,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        item.icon,
+                        size: 27,
+                        color: selected
+                            ? primary
+                            : Theme.of(context).iconTheme.color?.withOpacity(0.82),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        item.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          height: 1,
+                          fontWeight:
+                              selected ? FontWeight.w800 : FontWeight.w600,
+                          color: selected
+                              ? primary
+                              : Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.color
+                                  ?.withOpacity(0.78),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }),
+        ),
+      ),
+    );
+  }
+}
+
+class _GlassSurface extends StatelessWidget {
+  final Widget child;
+  final double radius;
+  final EdgeInsetsGeometry padding;
+  final String? coverPath;
+
+  const _GlassSurface({
+    required this.child,
+    this.radius = 28,
+    this.padding = const EdgeInsets.all(0),
+    this.coverPath,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = Theme.of(context).colorScheme.primary;
+    final hasCover = coverPath != null && File(coverPath!).existsSync();
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(radius),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            color: (isDark ? Colors.black : Colors.white).withOpacity(0.34),
+            border: Border.all(color: Colors.white.withOpacity(0.24)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(isDark ? 0.32 : 0.12),
+                blurRadius: 28,
+                offset: const Offset(0, 14),
+              ),
+              BoxShadow(
+                color: Colors.white.withOpacity(isDark ? 0.06 : 0.34),
+                blurRadius: 18,
+                offset: const Offset(-4, -4),
+              ),
+            ],
+          ),
+          child: Stack(
+            children: [
+              if (hasCover)
+                Positioned.fill(
+                  child: Transform(
+                    alignment: Alignment.center,
+                    transform: Matrix4.identity()..scale(-1.0, 1.0, 1.0),
+                    child: Opacity(
+                      opacity: 0.18,
+                      child: Image.file(
+                        File(coverPath!),
+                        fit: BoxFit.cover,
+                        filterQuality: FilterQuality.low,
+                      ),
+                    ),
+                  ),
+                ),
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(radius),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Colors.white.withOpacity(isDark ? 0.20 : 0.48),
+                        primary.withOpacity(0.08),
+                        Colors.black.withOpacity(isDark ? 0.22 : 0.04),
+                      ],
+                      stops: const [0.0, 0.48, 1.0],
+                    ),
+                  ),
+                ),
+              ),
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(radius),
+                      border: Border.all(
+                        color: Colors.white.withOpacity(0.16),
+                        width: 1,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Padding(padding: padding, child: child),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
 /// ===============================
 /// HOME (library) - STICKY HEROCARD + SEARCH BAR
 /// ===============================
@@ -2342,20 +2535,11 @@ class _HomePageState extends State<_HomePage> {
 
     return CustomScrollView(
       slivers: [
-        // ✨ HEROCARD STICKY (PINNED)
-        SliverPersistentHeader(
-          pinned: true,
-          delegate: _StickyHeroDelegate(
-            child: ClipRect(
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-                child: Container(
-                  color: Colors.transparent,
-                  padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
-                  child: _FloatingHero(child: _HeroCard(logic: widget.logic)),
-                ),
-              ),
-            ),
+        // ✨ GLASS MUSIC BAR - dùng SliverToBoxAdapter để tránh lỗi element khi hot reload
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+            child: _FloatingHero(child: _HeroCard(logic: widget.logic)),
           ),
         ),
 
@@ -2539,7 +2723,7 @@ class _StickyHeroDelegate extends SliverPersistentHeaderDelegate {
   }
 
   @override
-  bool shouldRebuild(_StickyHeroDelegate oldDelegate) => false;
+  bool shouldRebuild(_StickyHeroDelegate oldDelegate) => true;
 }
 
 class _TrackMenu extends StatelessWidget {
@@ -2629,51 +2813,73 @@ class _HeroCard extends StatelessWidget {
           Colors.white70.value,
     );
 
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Row(
-          children: [
-            _CoverThumb(path: t?.coverPath, title: title, size: 48),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 2),
-                  Text(
-                    artist,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(color: textSecondary),
+    return _GlassSurface(
+      radius: 26,
+      coverPath: t?.coverPath,
+      padding: EdgeInsets.zero,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(26),
+          onTap: () async => await logic.playPause(),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                _CoverThumb(path: t?.coverPath, title: title, size: 48),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium),
+                      const SizedBox(height: 2),
+                      Text(
+                        artist.isEmpty ? 'Chạm để phát nhạc' : artist,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: textSecondary),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 8),
+                _AudioVisualizer(
+                  isPlaying: playing,
+                  barColor: Color(
+                      logic.settings.themeConfig.colors['visualizerBar'] ??
+                          Colors.grey.value),
+                ),
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withOpacity(0.18),
+                    border: Border.all(
+                      color: Colors.white.withOpacity(0.22),
+                    ),
+                  ),
+                  child: Icon(
+                    playing
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 8),
-            _AudioVisualizer(
-              isPlaying: playing,
-              barColor: Color(
-                  logic.settings.themeConfig.colors['visualizerBar'] ??
-                      Colors.grey.value),
-            ),
-            IconButton(
-              onPressed: () async => await logic.playPause(),
-              icon: Icon(
-                  playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
-              padding: const EdgeInsets.all(8),
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -3121,6 +3327,7 @@ class _PlaylistSheet extends StatelessWidget {
     );
   }
 }
+
 
 class _FavoriteSegmentsSheet extends StatelessWidget {
   final AppLogic logic;
