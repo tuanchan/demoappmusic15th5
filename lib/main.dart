@@ -2462,6 +2462,18 @@ class _Shell extends StatelessWidget {
         title: Text(logic.settings.appTitle),
         actions: [
           IconButton(
+            tooltip: 'Làm mới thư viện',
+            onPressed: () async {
+              await logic.refreshFolderLibrary();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Đã làm mới thư viện')),
+                );
+              }
+            },
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+          IconButton(
             tooltip: 'Now Playing',
             onPressed: () => _openNowPlaying(context),
             icon: const Icon(Icons.queue_music_rounded),
