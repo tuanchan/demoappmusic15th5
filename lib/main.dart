@@ -2318,7 +2318,7 @@ class _GlassNavItem {
   const _GlassNavItem({required this.icon, required this.label});
 }
 
-class _GlassBottomNav extends StatelessWidget {
+class _GlassBottomNav extends StatefulWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
   final List<_GlassNavItem> items;
@@ -2328,6 +2328,29 @@ class _GlassBottomNav extends StatelessWidget {
     required this.onTap,
     required this.items,
   });
+
+  @override
+  State<_GlassBottomNav> createState() => _GlassBottomNavState();
+}
+
+class _GlassBottomNavState extends State<_GlassBottomNav> {
+  double? _dragX;
+
+  void _updateDrag(Offset localPosition, double width) {
+    if (widget.items.isEmpty || width <= 0) return;
+    setState(() => _dragX = localPosition.dx.clamp(0.0, width));
+  }
+
+  void _commitDrag(double width) {
+    if (widget.items.isEmpty || width <= 0 || _dragX == null) {
+      setState(() => _dragX = null);
+      return;
+    }
+    final itemW = width / widget.items.length;
+    final index = (_dragX! / itemW).floor().clamp(0, widget.items.length - 1).toInt();
+    setState(() => _dragX = null);
+    if (index != widget.currentIndex) widget.onTap(index);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2345,63 +2368,130 @@ class _GlassBottomNav extends StatelessWidget {
       child: _GlassSurface(
         radius: 32,
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        child: Row(
-          children: List.generate(items.length, (index) {
-            final item = items[index];
-            final selected = index == currentIndex;
+        child: LayoutBuilder(
+          builder: (context, c) {
+            final width = c.maxWidth;
+            final count = widget.items.length;
+            final itemW = count == 0 ? width : width / count;
+            final dragIndex = _dragX == null
+                ? widget.currentIndex.toDouble()
+                : ((_dragX! - itemW / 2) / itemW)
+                    .clamp(0.0, (count - 1).toDouble())
+                    .toDouble();
+            final visualIndex = dragIndex.round().clamp(0, count - 1).toInt();
+            final left = dragIndex * itemW;
 
-            return Expanded(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => onTap(index),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOutCubic,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(26),
-                    color: selected
-                        ? Colors.white.withOpacity(0.16)
-                        : Colors.transparent,
-                    border: selected
-                        ? Border.all(color: Colors.white.withOpacity(0.18))
-                        : null,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        item.icon,
-                        size: 27,
-                        color: selected
-                            ? primary
-                            : Theme.of(context).iconTheme.color?.withOpacity(0.82),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        item.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11,
-                          height: 1,
-                          fontWeight:
-                              selected ? FontWeight.w800 : FontWeight.w600,
-                          color: selected
-                              ? primary
-                              : Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.color
-                                  ?.withOpacity(0.78),
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragStart: (d) => _updateDrag(d.localPosition, width),
+              onHorizontalDragUpdate: (d) => _updateDrag(d.localPosition, width),
+              onHorizontalDragEnd: (_) => _commitDrag(width),
+              onHorizontalDragCancel: () => setState(() => _dragX = null),
+              child: SizedBox(
+                height: 62,
+                child: Stack(
+                  children: [
+                    AnimatedPositioned(
+                      duration: _dragX == null
+                          ? const Duration(milliseconds: 520)
+                          : Duration.zero,
+                      curve: Curves.elasticOut,
+                      left: left,
+                      top: 0,
+                      width: itemW,
+                      height: 62,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 3),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(26),
+                            color: Colors.white.withOpacity(0.10),
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                Colors.white.withOpacity(0.34),
+                                primary.withOpacity(0.13),
+                                Colors.white.withOpacity(0.055),
+                              ],
+                            ),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.36),
+                              width: 1.05,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: primary.withOpacity(0.16),
+                                blurRadius: 18,
+                                spreadRadius: -6,
+                                offset: const Offset(0, 8),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                    Row(
+                      children: List.generate(count, (index) {
+                        final item = widget.items[index];
+                        final selected = index == visualIndex;
+
+                        return Expanded(
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => widget.onTap(index),
+                            child: AnimatedScale(
+                              scale: selected ? 1.03 : 1.0,
+                              duration: const Duration(milliseconds: 180),
+                              curve: Curves.easeOutBack,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 8),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      item.icon,
+                                      size: 27,
+                                      color: selected
+                                          ? primary
+                                          : Theme.of(context)
+                                              .iconTheme
+                                              .color
+                                              ?.withOpacity(0.82),
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      item.label,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        height: 1,
+                                        fontWeight: selected
+                                            ? FontWeight.w800
+                                            : FontWeight.w600,
+                                        color: selected
+                                            ? primary
+                                            : Theme.of(context)
+                                                .textTheme
+                                                .bodySmall
+                                                ?.color
+                                                ?.withOpacity(0.78),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      }),
+                    ),
+                  ],
                 ),
               ),
             );
-          }),
+          },
         ),
       ),
     );
@@ -2426,26 +2516,29 @@ class _GlassSurface extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final primary = Theme.of(context).colorScheme.primary;
     final hasCover = coverPath != null && File(coverPath!).existsSync();
+    final baseColor = isDark ? Colors.black : Colors.white;
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        filter: ImageFilter.blur(sigmaX: 34, sigmaY: 34),
         child: DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(radius),
-            color: (isDark ? Colors.black : Colors.white).withOpacity(0.34),
-            border: Border.all(color: Colors.white.withOpacity(0.24)),
+            color: baseColor.withOpacity(isDark ? 0.28 : 0.38),
+            border: Border.all(color: Colors.white.withOpacity(0.30), width: 1.05),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(isDark ? 0.32 : 0.12),
-                blurRadius: 28,
-                offset: const Offset(0, 14),
+                color: Colors.black.withOpacity(isDark ? 0.42 : 0.14),
+                blurRadius: 36,
+                spreadRadius: -6,
+                offset: const Offset(0, 18),
               ),
               BoxShadow(
-                color: Colors.white.withOpacity(isDark ? 0.06 : 0.34),
+                color: Colors.white.withOpacity(isDark ? 0.07 : 0.42),
                 blurRadius: 18,
-                offset: const Offset(-4, -4),
+                spreadRadius: -8,
+                offset: const Offset(-6, -6),
               ),
             ],
           ),
@@ -2453,19 +2546,28 @@ class _GlassSurface extends StatelessWidget {
             children: [
               if (hasCover)
                 Positioned.fill(
-                  child: Transform(
-                    alignment: Alignment.center,
-                    transform: Matrix4.identity()..scale(-1.0, 1.0, 1.0),
-                    child: Opacity(
-                      opacity: 0.18,
-                      child: Image.file(
-                        File(coverPath!),
-                        fit: BoxFit.cover,
-                        filterQuality: FilterQuality.low,
+                  child: ImageFiltered(
+                    imageFilter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                    child: Transform.scale(
+                      scale: 1.16,
+                      child: Opacity(
+                        opacity: isDark ? 0.24 : 0.18,
+                        child: Image.file(
+                          File(coverPath!),
+                          fit: BoxFit.cover,
+                          filterQuality: FilterQuality.low,
+                        ),
                       ),
                     ),
                   ),
                 ),
+              Positioned.fill(
+                child: _LiquidGlassEdgeRefraction(
+                  radius: radius,
+                  tint: primary,
+                  isDark: isDark,
+                ),
+              ),
               Positioned.fill(
                 child: DecoratedBox(
                   decoration: BoxDecoration(
@@ -2474,12 +2576,22 @@ class _GlassSurface extends StatelessWidget {
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                       colors: [
-                        Colors.white.withOpacity(isDark ? 0.20 : 0.48),
-                        primary.withOpacity(0.08),
-                        Colors.black.withOpacity(isDark ? 0.22 : 0.04),
+                        Colors.white.withOpacity(isDark ? 0.18 : 0.42),
+                        primary.withOpacity(isDark ? 0.045 : 0.035),
+                        Colors.white.withOpacity(isDark ? 0.035 : 0.13),
+                        Colors.black.withOpacity(isDark ? 0.20 : 0.025),
                       ],
-                      stops: const [0.0, 0.48, 1.0],
+                      stops: const [0.0, 0.38, 0.68, 1.0],
                     ),
+                  ),
+                ),
+              ),
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: _LiquidGlassCausticPainter(
+                    primary: primary,
+                    isDark: isDark,
+                    radius: radius,
                   ),
                 ),
               ),
@@ -2489,8 +2601,17 @@ class _GlassSurface extends StatelessWidget {
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(radius),
                       border: Border.all(
-                        color: Colors.white.withOpacity(0.16),
-                        width: 1,
+                        color: Colors.white.withOpacity(isDark ? 0.22 : 0.46),
+                        width: 1.15,
+                      ),
+                      gradient: RadialGradient(
+                        center: const Alignment(-0.72, -0.92),
+                        radius: 1.2,
+                        colors: [
+                          Colors.white.withOpacity(isDark ? 0.18 : 0.44),
+                          Colors.transparent,
+                        ],
+                        stops: const [0.0, 0.72],
                       ),
                     ),
                   ),
@@ -2504,6 +2625,271 @@ class _GlassSurface extends StatelessWidget {
     );
   }
 }
+
+class _LiquidGlassEdgeRefraction extends StatelessWidget {
+  final double radius;
+  final Color tint;
+  final bool isDark;
+
+  const _LiquidGlassEdgeRefraction({
+    required this.radius,
+    required this.tint,
+    required this.isDark,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Chỉ bóp méo ở viền: phần giữa vẫn là nền blur sạch, không bị lồi/lõm.
+    return IgnorePointer(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: LayoutBuilder(
+          builder: (_, c) {
+            final w = c.maxWidth.isFinite ? c.maxWidth : 360.0;
+            final h = c.maxHeight.isFinite ? c.maxHeight : 88.0;
+            final rim = math.max(8.0, math.min(16.0, math.min(w, h) * 0.11));
+
+            return Stack(
+              children: [
+                _EdgeLensStrip(
+                  alignment: Alignment.topCenter,
+                  width: w,
+                  height: rim,
+                  radius: radius,
+                  tint: tint,
+                  isDark: isDark,
+                  flipX: false,
+                  flipY: true,
+                ),
+                _EdgeLensStrip(
+                  alignment: Alignment.bottomCenter,
+                  width: w,
+                  height: rim,
+                  radius: radius,
+                  tint: tint,
+                  isDark: isDark,
+                  flipX: false,
+                  flipY: true,
+                ),
+                _EdgeLensStrip(
+                  alignment: Alignment.centerLeft,
+                  width: rim,
+                  height: h,
+                  radius: radius,
+                  tint: tint,
+                  isDark: isDark,
+                  flipX: true,
+                  flipY: false,
+                ),
+                _EdgeLensStrip(
+                  alignment: Alignment.centerRight,
+                  width: rim,
+                  height: h,
+                  radius: radius,
+                  tint: tint,
+                  isDark: isDark,
+                  flipX: true,
+                  flipY: false,
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _EdgeLensStrip extends StatelessWidget {
+  final Alignment alignment;
+  final double width;
+  final double height;
+  final double radius;
+  final Color tint;
+  final bool isDark;
+  final bool flipX;
+  final bool flipY;
+
+  const _EdgeLensStrip({
+    required this.alignment,
+    required this.width,
+    required this.height,
+    required this.radius,
+    required this.tint,
+    required this.isDark,
+    required this.flipX,
+    required this.flipY,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final matrix = Matrix4.identity()
+      ..translate(flipX ? width : 0.0, flipY ? height : 0.0)
+      ..scale(flipX ? -1.0 : 1.0, flipY ? -1.0 : 1.0, 1.0)
+      ..scale(flipX ? 1.08 : 1.0, flipY ? 1.08 : 1.0, 1.0);
+
+    return Align(
+      alignment: alignment,
+      child: SizedBox(
+        width: width,
+        height: height,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(radius),
+          child: BackdropFilter(
+            filter: ImageFilter.matrix(
+              matrix.storage,
+              filterQuality: FilterQuality.high,
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: flipX ? Alignment.centerLeft : Alignment.topCenter,
+                  end: flipX ? Alignment.centerRight : Alignment.bottomCenter,
+                  colors: [
+                    Colors.white.withOpacity(isDark ? 0.24 : 0.46),
+                    tint.withOpacity(isDark ? 0.08 : 0.075),
+                    Colors.white.withOpacity(isDark ? 0.04 : 0.12),
+                  ],
+                  stops: const [0.0, 0.46, 1.0],
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.white.withOpacity(isDark ? 0.08 : 0.30),
+                    blurRadius: 10,
+                    spreadRadius: -3,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LiquidLensBlob extends StatelessWidget {
+  final Color tint;
+  final double opacity;
+  final double scaleX;
+  final double scaleY;
+
+  const _LiquidLensBlob({
+    required this.tint,
+    required this.opacity,
+    required this.scaleX,
+    required this.scaleY,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final matrix = Matrix4.identity()
+      ..translate((1 - scaleX) * 10, (1 - scaleY) * 6)
+      ..scale(scaleX, scaleY, 1.0);
+
+    return ClipOval(
+      child: BackdropFilter(
+        filter: ImageFilter.matrix(
+          matrix.storage,
+          filterQuality: FilterQuality.medium,
+        ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: const Alignment(-0.35, -0.45),
+              radius: 0.92,
+              colors: [
+                Colors.white.withOpacity(opacity + 0.08),
+                tint.withOpacity(opacity),
+                Colors.transparent,
+              ],
+              stops: const [0.0, 0.48, 1.0],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LiquidGlassCausticPainter extends CustomPainter {
+  final Color primary;
+  final bool isDark;
+  final double radius;
+
+  const _LiquidGlassCausticPainter({
+    required this.primary,
+    required this.isDark,
+    required this.radius,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final highlight = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.15
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.8)
+      ..color = Colors.white.withOpacity(isDark ? 0.24 : 0.52);
+
+    final softTint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.4)
+      ..color = primary.withOpacity(isDark ? 0.18 : 0.14);
+
+    final path = Path()
+      ..moveTo(size.width * 0.06, size.height * 0.22)
+      ..cubicTo(
+        size.width * 0.28,
+        size.height * 0.04,
+        size.width * 0.46,
+        size.height * 0.34,
+        size.width * 0.70,
+        size.height * 0.15,
+      )
+      ..cubicTo(
+        size.width * 0.82,
+        size.height * 0.06,
+        size.width * 0.92,
+        size.height * 0.10,
+        size.width * 0.98,
+        size.height * 0.18,
+      );
+    canvas.drawPath(path, highlight);
+
+    final path2 = Path()
+      ..moveTo(size.width * 0.10, size.height * 0.86)
+      ..cubicTo(
+        size.width * 0.34,
+        size.height * 0.70,
+        size.width * 0.54,
+        size.height * 1.06,
+        size.width * 0.90,
+        size.height * 0.78,
+      );
+    canvas.drawPath(path2, softTint);
+
+    final rim = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0
+      ..color = Colors.white.withOpacity(isDark ? 0.10 : 0.24);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Offset.zero & size,
+        Radius.circular(radius),
+      ).deflate(1.5),
+      rim,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _LiquidGlassCausticPainter oldDelegate) {
+    return oldDelegate.primary != primary ||
+        oldDelegate.isDark != isDark ||
+        oldDelegate.radius != radius;
+  }
+}
+
 
 
 /// ===============================
@@ -2535,11 +2921,12 @@ class _HomePageState extends State<_HomePage> {
 
     return CustomScrollView(
       slivers: [
-        // ✨ GLASS MUSIC BAR - dùng SliverToBoxAdapter để tránh lỗi element khi hot reload
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
-            child: _FloatingHero(child: _HeroCard(logic: widget.logic)),
+        // ✨ GLASS MUSIC BAR - ghim trên đầu list, kéo xuống không bị che/mất
+        SliverPersistentHeader(
+          pinned: true,
+          delegate: _PinnedMusicBarDelegate(
+            logic: widget.logic,
+            height: 82,
           ),
         ),
 
@@ -2790,6 +3177,49 @@ class _TrackMenu extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _PinnedMusicBarDelegate extends SliverPersistentHeaderDelegate {
+  final AppLogic logic;
+  final double height;
+
+  const _PinnedMusicBarDelegate({required this.logic, required this.height});
+
+  @override
+  double get minExtent => height;
+
+  @override
+  double get maxExtent => height;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    final bg = Theme.of(context).scaffoldBackgroundColor;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: bg.withOpacity(0.78),
+        boxShadow: overlapsContent
+            ? [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.16),
+                  blurRadius: 18,
+                  spreadRadius: -10,
+                  offset: const Offset(0, 10),
+                ),
+              ]
+            : null,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+        child: _FloatingHero(child: _HeroCard(logic: logic)),
+      ),
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _PinnedMusicBarDelegate oldDelegate) {
+    return oldDelegate.logic != logic || oldDelegate.height != height;
   }
 }
 
@@ -4043,6 +4473,12 @@ class _NowPlayingSheetState extends State<_NowPlayingSheet> {
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
                 child: Column(
                   children: [
+                    _GlassSurface(
+                      radius: 34,
+                      coverPath: track?.coverPath,
+                      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+                      child: Column(
+                        children: [
                     GestureDetector(
                       onHorizontalDragEnd: (d) async {
                         final v = d.primaryVelocity ?? 0;
@@ -4146,6 +4582,9 @@ class _NowPlayingSheetState extends State<_NowPlayingSheet> {
                                       Colors.white70.value)),
                         ),
                       ],
+                    ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
