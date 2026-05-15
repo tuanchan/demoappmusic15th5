@@ -545,8 +545,6 @@ class AppLogic extends ChangeNotifier {
   late Directory _rootDir;
   late Directory audioDir;
   late Directory imageDir;
-  late Directory playlistDir;
-  late Directory favoritesDir;
 
   AppSettings settings = AppSettings(
     themeMode: ThemeMode.dark,
@@ -807,12 +805,21 @@ class AppLogic extends ChangeNotifier {
 
     audioDir = Directory(p.join(_rootDir.path, 'Audio'));
     imageDir = Directory(p.join(_rootDir.path, 'Images'));
-    playlistDir = Directory(p.join(_rootDir.path, 'Playlists'));
-    favoritesDir = Directory(p.join(_rootDir.path, 'Favorites'));
-
-    for (final d in [_rootDir, audioDir, imageDir, playlistDir, favoritesDir]) {
+    for (final d in [_rootDir, audioDir, imageDir]) {
       if (!await d.exists()) await d.create(recursive: true);
     }
+
+    // 2 thư mục này không dùng nữa, dữ liệu yêu thích/playlist nằm trong app.db.
+    await _deleteUnusedFolderIfExists(p.join(_rootDir.path, 'Favorites'));
+    await _deleteUnusedFolderIfExists(p.join(_rootDir.path, 'Playlists'));
+  }
+
+  Future<void> _deleteUnusedFolderIfExists(String folderPath) async {
+    final dir = Directory(folderPath);
+    if (!await dir.exists()) return;
+    try {
+      await dir.delete(recursive: true);
+    } catch (_) {}
   }
 
   Future<void> _copyDirectory(Directory from, Directory to) async {
@@ -997,6 +1004,7 @@ class AppLogic extends ChangeNotifier {
 
   Future<void> _normalizeDbPathsAndScanAudioFolder() async {
     await _normalizeDbPaths();
+    await _importLooseAudioFilesBesideRoot();
     await scanAppAudioFolder();
   }
 
@@ -1043,6 +1051,50 @@ class AppLogic extends ChangeNotifier {
       if (_current == null && library.isNotEmpty) {
         await setCurrent(library.first.id, autoPlay: false);
       }
+    }
+  }
+
+
+  Future<void> _importLooseAudioFilesBesideRoot() async {
+    final dropDir = _rootDir.parent;
+    if (!await dropDir.exists()) return;
+
+    final files = dropDir
+        .listSync(recursive: false, followLinks: false)
+        .whereType<File>()
+        .where((f) => _isAudioPath(f.path))
+        .toList()
+      ..sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+
+    var imported = 0;
+    for (final file in files) {
+      final stat = await file.stat();
+      final signature = '${p.basename(file.path)}::${stat.size}';
+      final existed = await _db!.query(
+        'tracks',
+        where: 'signature=?',
+        whereArgs: [signature],
+        limit: 1,
+      );
+
+      if (existed.isNotEmpty) {
+        try {
+          await file.delete();
+        } catch (_) {}
+        continue;
+      }
+
+      final added = await _addAudioFileToDb(file, copyIntoAudioDir: true);
+      imported += added;
+      if (added > 0) {
+        try {
+          await file.delete();
+        } catch (_) {}
+      }
+    }
+
+    if (imported > 0) {
+      await _loadAllFromDb();
     }
   }
 
@@ -2197,46 +2249,19 @@ class _Shell extends StatelessWidget {
           ),
         ],
       ),
-      body: pages[tab],
-      bottomNavigationBar: AnimatedBuilder(
+      body: AnimatedBuilder(
         animation: logic,
-        builder: (context, _) {
-          final hasTrack = logic.currentTrack != null;
-          final bottomInset = MediaQuery.of(context).padding.bottom;
-          final navHeight = 76.0 + (bottomInset == 0 ? 10.0 : 4.0);
-
-          return SizedBox(
-            height: hasTrack ? navHeight + 78 : navHeight,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Align(
-                  alignment: Alignment.bottomCenter,
-                  child: _GlassBottomNav(
-                    currentIndex: tab,
-                    onTap: onTab,
-                    items: const [
-                      _GlassNavItem(icon: Icons.home_rounded, label: 'Home'),
-                      _GlassNavItem(icon: Icons.favorite_rounded, label: 'Yêu thích'),
-                      _GlassNavItem(icon: Icons.library_music_rounded, label: 'List'),
-                      _GlassNavItem(icon: Icons.settings_rounded, label: 'Setting'),
-                    ],
-                  ),
-                ),
-                if (hasTrack)
-                  Positioned(
-                    left: 16,
-                    right: 16,
-                    bottom: navHeight - 2,
-                    child: SizedBox(
-                      height: 70,
-                      child: _FloatingHero(child: _HeroCard(logic: logic)),
-                    ),
-                  ),
-              ],
-            ),
-          );
-        },
+        builder: (context, _) => pages[tab],
+      ),
+      bottomNavigationBar: _GlassBottomNav(
+        currentIndex: tab,
+        onTap: onTab,
+        items: const [
+          _GlassNavItem(icon: Icons.home_rounded, label: 'Home'),
+          _GlassNavItem(icon: Icons.favorite_rounded, label: 'Yêu thích'),
+          _GlassNavItem(icon: Icons.library_music_rounded, label: 'List'),
+          _GlassNavItem(icon: Icons.settings_rounded, label: 'Setting'),
+        ],
       ),
       floatingActionButton: (tab == 0)
           ? FloatingActionButton(
@@ -2489,10 +2514,6 @@ class _GlassBottomNavState extends State<_GlassBottomNav>
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(24),
                             color: Colors.white.withOpacity(0.075),
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.20),
-                              width: 0.8,
-                            ),
                             boxShadow: [
                               BoxShadow(
                                 color: primary.withOpacity(0.13),
@@ -2598,22 +2619,18 @@ class _GlassSurface extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
       child: BackdropFilter(
-        // Nền giữa chỉ blur, không làm lồi/lõm.
-        filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+        // Nền giữa chỉ blur mạnh để nhìn xuyên phần chữ/ảnh phía sau mờ rõ hơn.
+        filter: ImageFilter.blur(sigmaX: 72, sigmaY: 72),
         child: DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(radius),
-            color: baseColor.withOpacity(isDark ? 0.20 : 0.34),
-            border: Border.all(
-              color: Colors.white.withOpacity(isDark ? 0.16 : 0.40),
-              width: 0.55,
-            ),
+            color: baseColor.withOpacity(isDark ? 0.055 : 0.12),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(isDark ? 0.32 : 0.12),
-                blurRadius: 24,
-                spreadRadius: -10,
-                offset: const Offset(0, 12),
+                color: Colors.black.withOpacity(isDark ? 0.24 : 0.10),
+                blurRadius: 28,
+                spreadRadius: -12,
+                offset: const Offset(0, 14),
               ),
             ],
           ),
@@ -2626,7 +2643,7 @@ class _GlassSurface extends StatelessWidget {
                     child: Transform.scale(
                       scale: 1.08,
                       child: Opacity(
-                        opacity: isDark ? 0.11 : 0.08,
+                        opacity: isDark ? 0.15 : 0.10,
                         child: Image.file(
                           File(coverPath!),
                           fit: BoxFit.cover,
@@ -2644,28 +2661,12 @@ class _GlassSurface extends StatelessWidget {
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                       colors: [
-                        Colors.white.withOpacity(isDark ? 0.075 : 0.20),
-                        primary.withOpacity(isDark ? 0.018 : 0.014),
-                        Colors.black.withOpacity(isDark ? 0.08 : 0.012),
+                        Colors.white.withOpacity(isDark ? 0.045 : 0.11),
+                        primary.withOpacity(isDark ? 0.010 : 0.008),
+                        Colors.black.withOpacity(isDark ? 0.012 : 0.004),
                       ],
                       stops: const [0.0, 0.48, 1.0],
                     ),
-                  ),
-                ),
-              ),
-              Positioned.fill(
-                child: _LiquidGlassEdgeRefraction(
-                  radius: radius,
-                  tint: primary,
-                  isDark: isDark,
-                ),
-              ),
-              Positioned.fill(
-                child: CustomPaint(
-                  painter: _LiquidGlassRimPainter(
-                    primary: primary,
-                    isDark: isDark,
-                    radius: radius,
                   ),
                 ),
               ),
@@ -2698,8 +2699,8 @@ class _LiquidGlassEdgeRefraction extends StatelessWidget {
           builder: (_, c) {
             final w = c.maxWidth.isFinite ? c.maxWidth : 360.0;
             final h = c.maxHeight.isFinite ? c.maxHeight : 88.0;
-            // Viền thật mỏng: có cảm giác khúc xạ, không thành khối nâu dày.
-            final rim = math.max(4.0, math.min(7.0, math.min(w, h) * 0.072));
+            // Viền Telegram-style: thật mỏng, sáng, khúc xạ nhẹ, không tạo mảng nâu dày.
+            final rim = math.max(3.0, math.min(5.2, math.min(w, h) * 0.058));
 
             return Stack(
               children: [
@@ -2775,10 +2776,10 @@ class _EdgeLensStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Viền mỏng dùng ảnh nền phía sau, phóng to nhẹ rồi đảo chiều để tạo cảm giác khúc xạ/méo không gian.
+    // Viền mỏng lấy nền phía sau, phóng to và đảo chiều để tạo cảm giác khúc xạ kiểu Telegram.
     final matrix = Matrix4.identity()
-      ..translate(flipX ? width : width * -0.045, flipY ? height : height * -0.045)
-      ..scale(flipX ? -1.12 : 1.09, flipY ? -1.12 : 1.09, 1.0);
+      ..translate(flipX ? width : width * -0.035, flipY ? height : height * -0.035)
+      ..scale(flipX ? -1.18 : 1.12, flipY ? -1.18 : 1.12, 1.0);
 
     return Align(
       alignment: alignment,
@@ -2796,11 +2797,11 @@ class _EdgeLensStrip extends StatelessWidget {
                 begin: flipX ? Alignment.centerLeft : Alignment.topCenter,
                 end: flipX ? Alignment.centerRight : Alignment.bottomCenter,
                 colors: [
-                  Colors.white.withOpacity(isDark ? 0.28 : 0.54),
-                  tint.withOpacity(isDark ? 0.035 : 0.028),
-                  Colors.white.withOpacity(isDark ? 0.04 : 0.10),
+                  Colors.white.withOpacity(isDark ? 0.38 : 0.62),
+                  tint.withOpacity(isDark ? 0.022 : 0.018),
+                  Colors.white.withOpacity(isDark ? 0.08 : 0.14),
                 ],
-                stops: const [0.0, 0.42, 1.0],
+                stops: const [0.0, 0.48, 1.0],
               ),
             ),
           ),
@@ -2828,23 +2829,23 @@ class _LiquidGlassRimPainter extends CustomPainter {
 
     final outer = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0
-      ..color = Colors.white.withOpacity(isDark ? 0.18 : 0.42);
-    canvas.drawRRect(rrect.deflate(0.7), outer);
+      ..strokeWidth = 0.9
+      ..color = Colors.white.withOpacity(isDark ? 0.30 : 0.56);
+    canvas.drawRRect(rrect.deflate(0.55), outer);
 
     final inner = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.8
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.8)
-      ..color = Colors.white.withOpacity(isDark ? 0.10 : 0.26);
-    canvas.drawRRect(rrect.deflate(3.2), inner);
+      ..strokeWidth = 0.65
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.65)
+      ..color = Colors.white.withOpacity(isDark ? 0.16 : 0.30);
+    canvas.drawRRect(rrect.deflate(2.4), inner);
 
     final glint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 0.9
       ..strokeCap = StrokeCap.round
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.5)
-      ..color = Colors.white.withOpacity(isDark ? 0.18 : 0.44);
+      ..color = Colors.white.withOpacity(isDark ? 0.26 : 0.50);
 
     final topPath = Path()
       ..moveTo(size.width * 0.10, size.height * 0.12)
@@ -2923,6 +2924,17 @@ class _HomePageState extends State<_HomePage> {
             ),
           ),
         ),
+
+        // MINI PLAYER: chỉ nằm trong Home, né search lúc ở đầu trang,
+        // khi kéo xuống sẽ tự pin lên sát header.
+        if (widget.logic.currentTrack != null)
+          SliverPersistentHeader(
+            pinned: true,
+            delegate: _PinnedMusicBarDelegate(
+              logic: widget.logic,
+              height: 82,
+            ),
+          ),
 
         // HEADER
         SliverToBoxAdapter(
@@ -3162,23 +3174,19 @@ class _PinnedMusicBarDelegate extends SliverPersistentHeaderDelegate {
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
     final bg = Theme.of(context).scaffoldBackgroundColor;
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: bg.withOpacity(0.78),
-        boxShadow: overlapsContent
-            ? [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.16),
-                  blurRadius: 18,
-                  spreadRadius: -10,
-                  offset: const Offset(0, 10),
-                ),
-              ]
-            : null,
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
-        child: _FloatingHero(child: _HeroCard(logic: logic)),
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+        child: ColoredBox(
+          color: bg.withOpacity(overlapsContent ? 0.18 : 0.02),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+            child: SizedBox(
+              height: 70,
+              child: _FloatingHero(child: _HeroCard(logic: logic)),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -3201,8 +3209,6 @@ class _HeroCard extends StatelessWidget {
     final t = logic.currentTrack;
     final title = t?.title ?? 'Chưa chọn bài';
     final artist = t?.artist ?? '';
-    final playing = logic.handler.playbackState.value.playing;
-
     final textSecondary = Color(
       logic.settings.themeConfig.colors['textSecondary'] ??
           Theme.of(context).textTheme.bodySmall?.color?.value ??
@@ -3246,32 +3252,47 @@ class _HeroCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                _AudioVisualizer(
-                  isPlaying: playing,
-                  barColor: Color(
-                      logic.settings.themeConfig.colors['visualizerBar'] ??
-                          Colors.grey.value),
-                ),
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Theme.of(context)
-                        .colorScheme
-                        .primary
-                        .withOpacity(0.18),
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.22),
-                    ),
-                  ),
-                  child: Icon(
-                    playing
-                        ? Icons.pause_rounded
-                        : Icons.play_arrow_rounded,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
+                const SizedBox(width: 12),
+                StreamBuilder<PlaybackState>(
+                  stream: logic.handler.playbackState,
+                  initialData: logic.handler.playbackState.value,
+                  builder: (context, snapshot) {
+                    final playing = snapshot.data?.playing ?? false;
+
+                    return Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _AudioVisualizer(
+                          isPlaying: playing,
+                          barColor: Color(
+                            logic.settings.themeConfig.colors['visualizerBar'] ??
+                                Colors.grey.value,
+                          ),
+                        ),
+                        SizedBox(width: playing ? 16 : 0),
+                        Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withOpacity(0.18),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.22),
+                            ),
+                          ),
+                          child: Icon(
+                            playing
+                                ? Icons.pause_rounded
+                                : Icons.play_arrow_rounded,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
               ],
             ),
