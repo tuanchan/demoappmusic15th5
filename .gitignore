@@ -1,0 +1,9 @@
+﻿.dart_tool/
+build/
+.idea/
+.vscode/
+*.iml
+pubspec.lock
+windows/flutter/ephemeral/
+linux/flutter/ephemeral/
+macos/Flutter/ephemeral/
