@@ -2198,15 +2198,45 @@ class _Shell extends StatelessWidget {
         ],
       ),
       body: pages[tab],
-      bottomNavigationBar: _GlassBottomNav(
-        currentIndex: tab,
-        onTap: onTab,
-        items: const [
-          _GlassNavItem(icon: Icons.home_rounded, label: 'Home'),
-          _GlassNavItem(icon: Icons.favorite_rounded, label: 'Yêu thích'),
-          _GlassNavItem(icon: Icons.library_music_rounded, label: 'List'),
-          _GlassNavItem(icon: Icons.settings_rounded, label: 'Setting'),
-        ],
+      bottomNavigationBar: AnimatedBuilder(
+        animation: logic,
+        builder: (context, _) {
+          final hasTrack = logic.currentTrack != null;
+          final bottomInset = MediaQuery.of(context).padding.bottom;
+          final navHeight = 76.0 + (bottomInset == 0 ? 10.0 : 4.0);
+
+          return SizedBox(
+            height: hasTrack ? navHeight + 78 : navHeight,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: _GlassBottomNav(
+                    currentIndex: tab,
+                    onTap: onTab,
+                    items: const [
+                      _GlassNavItem(icon: Icons.home_rounded, label: 'Home'),
+                      _GlassNavItem(icon: Icons.favorite_rounded, label: 'Yêu thích'),
+                      _GlassNavItem(icon: Icons.library_music_rounded, label: 'List'),
+                      _GlassNavItem(icon: Icons.settings_rounded, label: 'Setting'),
+                    ],
+                  ),
+                ),
+                if (hasTrack)
+                  Positioned(
+                    left: 16,
+                    right: 16,
+                    bottom: navHeight - 2,
+                    child: SizedBox(
+                      height: 70,
+                      child: _FloatingHero(child: _HeroCard(logic: logic)),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
       ),
       floatingActionButton: (tab == 0)
           ? FloatingActionButton(
@@ -2333,98 +2363,142 @@ class _GlassBottomNav extends StatefulWidget {
   State<_GlassBottomNav> createState() => _GlassBottomNavState();
 }
 
-class _GlassBottomNavState extends State<_GlassBottomNav> {
+class _GlassBottomNavState extends State<_GlassBottomNav>
+    with SingleTickerProviderStateMixin {
   double? _dragX;
+  double _dragVisualIndex = 0;
+  late final AnimationController _spring;
+  late Animation<double> _springAnim;
+
+  double get _targetIndex => widget.currentIndex.toDouble();
+
+  @override
+  void initState() {
+    super.initState();
+    _dragVisualIndex = _targetIndex;
+    _spring = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 470),
+    )..addListener(() {
+        setState(() => _dragVisualIndex = _springAnim.value);
+      });
+    _springAnim = AlwaysStoppedAnimation(_dragVisualIndex);
+  }
+
+  @override
+  void didUpdateWidget(covariant _GlassBottomNav oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentIndex != widget.currentIndex && _dragX == null) {
+      _animateTo(_targetIndex);
+    }
+  }
+
+  @override
+  void dispose() {
+    _spring.dispose();
+    super.dispose();
+  }
+
+  void _animateTo(double value) {
+    _spring.stop();
+    _springAnim = Tween<double>(begin: _dragVisualIndex, end: value).animate(
+      CurvedAnimation(parent: _spring, curve: Curves.easeOutBack),
+    );
+    _spring.forward(from: 0);
+  }
+
+  double _indexFromDx(double dx, double width) {
+    final count = widget.items.length;
+    if (count <= 1 || width <= 0) return 0;
+    final itemW = width / count;
+    return ((dx - itemW / 2) / itemW).clamp(0.0, (count - 1).toDouble());
+  }
 
   void _updateDrag(Offset localPosition, double width) {
     if (widget.items.isEmpty || width <= 0) return;
-    setState(() => _dragX = localPosition.dx.clamp(0.0, width));
+    _spring.stop();
+    setState(() {
+      _dragX = localPosition.dx.clamp(0.0, width);
+      _dragVisualIndex = _indexFromDx(_dragX!, width);
+    });
   }
 
   void _commitDrag(double width) {
     if (widget.items.isEmpty || width <= 0 || _dragX == null) {
       setState(() => _dragX = null);
+      _animateTo(_targetIndex);
       return;
     }
-    final itemW = width / widget.items.length;
-    final index = (_dragX! / itemW).floor().clamp(0, widget.items.length - 1).toInt();
+    final index = _dragVisualIndex.round().clamp(0, widget.items.length - 1).toInt();
     setState(() => _dragX = null);
-    if (index != widget.currentIndex) widget.onTap(index);
+    if (index != widget.currentIndex) {
+      widget.onTap(index);
+    } else {
+      _animateTo(index.toDouble());
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.of(context).padding.bottom;
     final primary = Theme.of(context).colorScheme.primary;
+    final count = widget.items.length;
 
     return SafeArea(
       top: false,
       minimum: EdgeInsets.fromLTRB(
-        16,
+        18,
         0,
-        16,
-        math.max(10, bottom == 0 ? 12 : 6),
+        18,
+        bottom == 0 ? 10 : 4,
       ),
       child: _GlassSurface(
-        radius: 32,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        radius: 28,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
         child: LayoutBuilder(
           builder: (context, c) {
             final width = c.maxWidth;
-            final count = widget.items.length;
             final itemW = count == 0 ? width : width / count;
-            final dragIndex = _dragX == null
-                ? widget.currentIndex.toDouble()
-                : ((_dragX! - itemW / 2) / itemW)
-                    .clamp(0.0, (count - 1).toDouble())
-                    .toDouble();
-            final visualIndex = dragIndex.round().clamp(0, count - 1).toInt();
-            final left = dragIndex * itemW;
+            final visualIndex = (_dragX == null ? _dragVisualIndex : _dragVisualIndex)
+                .round()
+                .clamp(0, count - 1)
+                .toInt();
+            final left = _dragVisualIndex.clamp(0.0, (count - 1).toDouble()) * itemW;
 
             return GestureDetector(
               behavior: HitTestBehavior.opaque,
               onHorizontalDragStart: (d) => _updateDrag(d.localPosition, width),
               onHorizontalDragUpdate: (d) => _updateDrag(d.localPosition, width),
               onHorizontalDragEnd: (_) => _commitDrag(width),
-              onHorizontalDragCancel: () => setState(() => _dragX = null),
+              onHorizontalDragCancel: () {
+                setState(() => _dragX = null);
+                _animateTo(_targetIndex);
+              },
               child: SizedBox(
-                height: 62,
+                height: 54,
                 child: Stack(
                   children: [
-                    AnimatedPositioned(
-                      duration: _dragX == null
-                          ? const Duration(milliseconds: 520)
-                          : Duration.zero,
-                      curve: Curves.elasticOut,
+                    Positioned(
                       left: left,
-                      top: 0,
+                      top: 3,
                       width: itemW,
-                      height: 62,
+                      height: 48,
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 3),
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
                         child: DecoratedBox(
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(26),
-                            color: Colors.white.withOpacity(0.10),
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                Colors.white.withOpacity(0.34),
-                                primary.withOpacity(0.13),
-                                Colors.white.withOpacity(0.055),
-                              ],
-                            ),
+                            borderRadius: BorderRadius.circular(24),
+                            color: Colors.white.withOpacity(0.075),
                             border: Border.all(
-                              color: Colors.white.withOpacity(0.36),
-                              width: 1.05,
+                              color: Colors.white.withOpacity(0.20),
+                              width: 0.8,
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: primary.withOpacity(0.16),
-                                blurRadius: 18,
-                                spreadRadius: -6,
-                                offset: const Offset(0, 8),
+                                color: primary.withOpacity(0.13),
+                                blurRadius: 16,
+                                spreadRadius: -8,
+                                offset: const Offset(0, 7),
                               ),
                             ],
                           ),
@@ -2439,25 +2513,28 @@ class _GlassBottomNavState extends State<_GlassBottomNav> {
                         return Expanded(
                           child: GestureDetector(
                             behavior: HitTestBehavior.opaque,
-                            onTap: () => widget.onTap(index),
+                            onTap: () {
+                              if (index != widget.currentIndex) widget.onTap(index);
+                              _animateTo(index.toDouble());
+                            },
                             child: AnimatedScale(
-                              scale: selected ? 1.03 : 1.0,
-                              duration: const Duration(milliseconds: 180),
-                              curve: Curves.easeOutBack,
+                              scale: selected ? 1.025 : 1.0,
+                              duration: const Duration(milliseconds: 160),
+                              curve: Curves.easeOut,
                               child: Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 8),
+                                padding: const EdgeInsets.symmetric(vertical: 6),
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Icon(
                                       item.icon,
-                                      size: 27,
+                                      size: 24,
                                       color: selected
                                           ? primary
                                           : Theme.of(context)
                                               .iconTheme
                                               .color
-                                              ?.withOpacity(0.82),
+                                              ?.withOpacity(0.76),
                                     ),
                                     const SizedBox(height: 3),
                                     Text(
@@ -2465,7 +2542,7 @@ class _GlassBottomNavState extends State<_GlassBottomNav> {
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
-                                        fontSize: 11,
+                                        fontSize: 10.5,
                                         height: 1,
                                         fontWeight: selected
                                             ? FontWeight.w800
@@ -2476,7 +2553,7 @@ class _GlassBottomNavState extends State<_GlassBottomNav> {
                                                 .textTheme
                                                 .bodySmall
                                                 ?.color
-                                                ?.withOpacity(0.78),
+                                                ?.withOpacity(0.72),
                                       ),
                                     ),
                                   ],
@@ -2521,24 +2598,22 @@ class _GlassSurface extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 34, sigmaY: 34),
+        // Nền giữa chỉ blur, không làm lồi/lõm.
+        filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
         child: DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(radius),
-            color: baseColor.withOpacity(isDark ? 0.28 : 0.38),
-            border: Border.all(color: Colors.white.withOpacity(0.30), width: 1.05),
+            color: baseColor.withOpacity(isDark ? 0.20 : 0.34),
+            border: Border.all(
+              color: Colors.white.withOpacity(isDark ? 0.16 : 0.40),
+              width: 0.55,
+            ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(isDark ? 0.42 : 0.14),
-                blurRadius: 36,
-                spreadRadius: -6,
-                offset: const Offset(0, 18),
-              ),
-              BoxShadow(
-                color: Colors.white.withOpacity(isDark ? 0.07 : 0.42),
-                blurRadius: 18,
-                spreadRadius: -8,
-                offset: const Offset(-6, -6),
+                color: Colors.black.withOpacity(isDark ? 0.32 : 0.12),
+                blurRadius: 24,
+                spreadRadius: -10,
+                offset: const Offset(0, 12),
               ),
             ],
           ),
@@ -2547,11 +2622,11 @@ class _GlassSurface extends StatelessWidget {
               if (hasCover)
                 Positioned.fill(
                   child: ImageFiltered(
-                    imageFilter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                    imageFilter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
                     child: Transform.scale(
-                      scale: 1.16,
+                      scale: 1.08,
                       child: Opacity(
-                        opacity: isDark ? 0.24 : 0.18,
+                        opacity: isDark ? 0.11 : 0.08,
                         child: Image.file(
                           File(coverPath!),
                           fit: BoxFit.cover,
@@ -2562,13 +2637,6 @@ class _GlassSurface extends StatelessWidget {
                   ),
                 ),
               Positioned.fill(
-                child: _LiquidGlassEdgeRefraction(
-                  radius: radius,
-                  tint: primary,
-                  isDark: isDark,
-                ),
-              ),
-              Positioned.fill(
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(radius),
@@ -2576,44 +2644,28 @@ class _GlassSurface extends StatelessWidget {
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                       colors: [
-                        Colors.white.withOpacity(isDark ? 0.18 : 0.42),
-                        primary.withOpacity(isDark ? 0.045 : 0.035),
-                        Colors.white.withOpacity(isDark ? 0.035 : 0.13),
-                        Colors.black.withOpacity(isDark ? 0.20 : 0.025),
+                        Colors.white.withOpacity(isDark ? 0.075 : 0.20),
+                        primary.withOpacity(isDark ? 0.018 : 0.014),
+                        Colors.black.withOpacity(isDark ? 0.08 : 0.012),
                       ],
-                      stops: const [0.0, 0.38, 0.68, 1.0],
+                      stops: const [0.0, 0.48, 1.0],
                     ),
                   ),
+                ),
+              ),
+              Positioned.fill(
+                child: _LiquidGlassEdgeRefraction(
+                  radius: radius,
+                  tint: primary,
+                  isDark: isDark,
                 ),
               ),
               Positioned.fill(
                 child: CustomPaint(
-                  painter: _LiquidGlassCausticPainter(
+                  painter: _LiquidGlassRimPainter(
                     primary: primary,
                     isDark: isDark,
                     radius: radius,
-                  ),
-                ),
-              ),
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(radius),
-                      border: Border.all(
-                        color: Colors.white.withOpacity(isDark ? 0.22 : 0.46),
-                        width: 1.15,
-                      ),
-                      gradient: RadialGradient(
-                        center: const Alignment(-0.72, -0.92),
-                        radius: 1.2,
-                        colors: [
-                          Colors.white.withOpacity(isDark ? 0.18 : 0.44),
-                          Colors.transparent,
-                        ],
-                        stops: const [0.0, 0.72],
-                      ),
-                    ),
                   ),
                 ),
               ),
@@ -2639,7 +2691,6 @@ class _LiquidGlassEdgeRefraction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Chỉ bóp méo ở viền: phần giữa vẫn là nền blur sạch, không bị lồi/lõm.
     return IgnorePointer(
       child: ClipRRect(
         borderRadius: BorderRadius.circular(radius),
@@ -2647,7 +2698,8 @@ class _LiquidGlassEdgeRefraction extends StatelessWidget {
           builder: (_, c) {
             final w = c.maxWidth.isFinite ? c.maxWidth : 360.0;
             final h = c.maxHeight.isFinite ? c.maxHeight : 88.0;
-            final rim = math.max(8.0, math.min(16.0, math.min(w, h) * 0.11));
+            // Viền thật mỏng: có cảm giác khúc xạ, không thành khối nâu dày.
+            final rim = math.max(4.0, math.min(7.0, math.min(w, h) * 0.072));
 
             return Stack(
               children: [
@@ -2723,42 +2775,32 @@ class _EdgeLensStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Viền mỏng dùng ảnh nền phía sau, phóng to nhẹ rồi đảo chiều để tạo cảm giác khúc xạ/méo không gian.
     final matrix = Matrix4.identity()
-      ..translate(flipX ? width : 0.0, flipY ? height : 0.0)
-      ..scale(flipX ? -1.0 : 1.0, flipY ? -1.0 : 1.0, 1.0)
-      ..scale(flipX ? 1.08 : 1.0, flipY ? 1.08 : 1.0, 1.0);
+      ..translate(flipX ? width : width * -0.045, flipY ? height : height * -0.045)
+      ..scale(flipX ? -1.12 : 1.09, flipY ? -1.12 : 1.09, 1.0);
 
     return Align(
       alignment: alignment,
       child: SizedBox(
         width: width,
         height: height,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(radius),
-          child: BackdropFilter(
-            filter: ImageFilter.matrix(
-              matrix.storage,
-              filterQuality: FilterQuality.high,
-            ),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: flipX ? Alignment.centerLeft : Alignment.topCenter,
-                  end: flipX ? Alignment.centerRight : Alignment.bottomCenter,
-                  colors: [
-                    Colors.white.withOpacity(isDark ? 0.24 : 0.46),
-                    tint.withOpacity(isDark ? 0.08 : 0.075),
-                    Colors.white.withOpacity(isDark ? 0.04 : 0.12),
-                  ],
-                  stops: const [0.0, 0.46, 1.0],
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.white.withOpacity(isDark ? 0.08 : 0.30),
-                    blurRadius: 10,
-                    spreadRadius: -3,
-                  ),
+        child: BackdropFilter(
+          filter: ImageFilter.matrix(
+            matrix.storage,
+            filterQuality: FilterQuality.high,
+          ),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: flipX ? Alignment.centerLeft : Alignment.topCenter,
+                end: flipX ? Alignment.centerRight : Alignment.bottomCenter,
+                colors: [
+                  Colors.white.withOpacity(isDark ? 0.28 : 0.54),
+                  tint.withOpacity(isDark ? 0.035 : 0.028),
+                  Colors.white.withOpacity(isDark ? 0.04 : 0.10),
                 ],
+                stops: const [0.0, 0.42, 1.0],
               ),
             ),
           ),
@@ -2768,56 +2810,12 @@ class _EdgeLensStrip extends StatelessWidget {
   }
 }
 
-class _LiquidLensBlob extends StatelessWidget {
-  final Color tint;
-  final double opacity;
-  final double scaleX;
-  final double scaleY;
-
-  const _LiquidLensBlob({
-    required this.tint,
-    required this.opacity,
-    required this.scaleX,
-    required this.scaleY,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final matrix = Matrix4.identity()
-      ..translate((1 - scaleX) * 10, (1 - scaleY) * 6)
-      ..scale(scaleX, scaleY, 1.0);
-
-    return ClipOval(
-      child: BackdropFilter(
-        filter: ImageFilter.matrix(
-          matrix.storage,
-          filterQuality: FilterQuality.medium,
-        ),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: RadialGradient(
-              center: const Alignment(-0.35, -0.45),
-              radius: 0.92,
-              colors: [
-                Colors.white.withOpacity(opacity + 0.08),
-                tint.withOpacity(opacity),
-                Colors.transparent,
-              ],
-              stops: const [0.0, 0.48, 1.0],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _LiquidGlassCausticPainter extends CustomPainter {
+class _LiquidGlassRimPainter extends CustomPainter {
   final Color primary;
   final bool isDark;
   final double radius;
 
-  const _LiquidGlassCausticPainter({
+  const _LiquidGlassRimPainter({
     required this.primary,
     required this.isDark,
     required this.radius,
@@ -2825,72 +2823,49 @@ class _LiquidGlassCausticPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final highlight = Paint()
+    final rect = Offset.zero & size;
+    final rrect = RRect.fromRectAndRadius(rect, Radius.circular(radius));
+
+    final outer = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.15
+      ..strokeWidth = 1.0
+      ..color = Colors.white.withOpacity(isDark ? 0.18 : 0.42);
+    canvas.drawRRect(rrect.deflate(0.7), outer);
+
+    final inner = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.8
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.8)
-      ..color = Colors.white.withOpacity(isDark ? 0.24 : 0.52);
+      ..color = Colors.white.withOpacity(isDark ? 0.10 : 0.26);
+    canvas.drawRRect(rrect.deflate(3.2), inner);
 
-    final softTint = Paint()
+    final glint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.4)
-      ..color = primary.withOpacity(isDark ? 0.18 : 0.14);
+      ..strokeWidth = 0.9
+      ..strokeCap = StrokeCap.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.5)
+      ..color = Colors.white.withOpacity(isDark ? 0.18 : 0.44);
 
-    final path = Path()
-      ..moveTo(size.width * 0.06, size.height * 0.22)
+    final topPath = Path()
+      ..moveTo(size.width * 0.10, size.height * 0.12)
       ..cubicTo(
-        size.width * 0.28,
-        size.height * 0.04,
-        size.width * 0.46,
-        size.height * 0.34,
-        size.width * 0.70,
-        size.height * 0.15,
-      )
-      ..cubicTo(
-        size.width * 0.82,
-        size.height * 0.06,
-        size.width * 0.92,
-        size.height * 0.10,
-        size.width * 0.98,
+        size.width * 0.30,
+        size.height * 0.02,
+        size.width * 0.50,
         size.height * 0.18,
+        size.width * 0.74,
+        size.height * 0.08,
       );
-    canvas.drawPath(path, highlight);
-
-    final path2 = Path()
-      ..moveTo(size.width * 0.10, size.height * 0.86)
-      ..cubicTo(
-        size.width * 0.34,
-        size.height * 0.70,
-        size.width * 0.54,
-        size.height * 1.06,
-        size.width * 0.90,
-        size.height * 0.78,
-      );
-    canvas.drawPath(path2, softTint);
-
-    final rim = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0
-      ..color = Colors.white.withOpacity(isDark ? 0.10 : 0.24);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Offset.zero & size,
-        Radius.circular(radius),
-      ).deflate(1.5),
-      rim,
-    );
+    canvas.drawPath(topPath, glint);
   }
 
   @override
-  bool shouldRepaint(covariant _LiquidGlassCausticPainter oldDelegate) {
+  bool shouldRepaint(covariant _LiquidGlassRimPainter oldDelegate) {
     return oldDelegate.primary != primary ||
         oldDelegate.isDark != isDark ||
         oldDelegate.radius != radius;
   }
 }
-
-
 
 /// ===============================
 /// HOME (library) - STICKY HEROCARD + SEARCH BAR
@@ -2921,15 +2896,6 @@ class _HomePageState extends State<_HomePage> {
 
     return CustomScrollView(
       slivers: [
-        // ✨ GLASS MUSIC BAR - ghim trên đầu list, kéo xuống không bị che/mất
-        SliverPersistentHeader(
-          pinned: true,
-          delegate: _PinnedMusicBarDelegate(
-            logic: widget.logic,
-            height: 82,
-          ),
-        ),
-
         // SEARCH BAR
         SliverToBoxAdapter(
           child: Padding(
