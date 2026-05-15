@@ -480,20 +480,44 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     int startIndex = 0,
     Duration? startPos,
   }) async {
-    queue.add(items);
+    final playableItems = items.where((mi) {
+      final path = mi.extras?['path'];
+      return path is String && path.isNotEmpty && File(path).existsSync();
+    }).toList();
 
-    final sources = items.map((mi) {
+    if (playableItems.isEmpty) {
+      queue.add(const <MediaItem>[]);
+      await _player.stop();
+      return;
+    }
+
+    final selectedId =
+        (startIndex >= 0 && startIndex < items.length) ? items[startIndex].id : null;
+
+    var fixedStartIndex = selectedId == null
+        ? 0
+        : playableItems.indexWhere((mi) => mi.id == selectedId);
+    if (fixedStartIndex < 0) fixedStartIndex = 0;
+
+    queue.add(playableItems);
+
+    final sources = playableItems.map((mi) {
       final uri = Uri.file(mi.extras?['path'] as String);
       return AudioSource.uri(uri, tag: mi);
     }).toList();
 
-    await _player.setAudioSource(
-      ConcatenatingAudioSource(children: sources),
-      initialIndex: startIndex,
-    );
+    try {
+      await _player.setAudioSource(
+        ConcatenatingAudioSource(children: sources),
+        initialIndex: fixedStartIndex,
+      );
 
-    if (startPos != null) {
-      await _player.seek(startPos);
+      if (startPos != null) {
+        await _player.seek(startPos);
+      }
+    } catch (_) {
+      queue.add(const <MediaItem>[]);
+      await _player.stop();
     }
   }
 
@@ -562,6 +586,7 @@ class AppLogic extends ChangeNotifier {
 
   // Player
   late final PlayerHandler handler;
+  bool _handlerReady = false;
   Duration position = Duration.zero;
 
   bool loopOne = false;
@@ -594,10 +619,8 @@ class AppLogic extends ChangeNotifier {
 
     await _initFolders();
     await _initDb();
-    await _normalizeDbPathsAndScanAudioFolder();
-    await _loadAllFromDb();
 
-    // Audio session for background playback
+    // Audio phải được khởi tạo trước khi scan/restore gọi setCurrent().
     final session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
 
@@ -618,6 +641,7 @@ class AppLogic extends ChangeNotifier {
         androidNotificationOngoing: true,
       ),
     );
+    _handlerReady = true;
 
     // Sync UI currentTrack theo MediaItem thật của player
     _mediaItemSub = handler.mediaItem.listen((mi) {
@@ -630,6 +654,9 @@ class AppLogic extends ChangeNotifier {
         notifyListeners();
       }
     });
+
+    await _normalizeDbPathsAndScanAudioFolder();
+    await _loadAllFromDb();
 
     // Restore without autoplay
     await _restorePlaybackStateWithoutAutoPlay();
@@ -1697,9 +1724,17 @@ class AppLogic extends ChangeNotifier {
 
     _current = library[idx];
 
+    if (!_handlerReady) {
+      notifyListeners();
+      return;
+    }
+
     final items = library.map(_toMediaItem).toList();
-    await handler.setQueueFromTracks(items,
-        startIndex: idx, startPos: startPos);
+    await handler.setQueueFromTracks(
+      items,
+      startIndex: idx,
+      startPos: startPos,
+    );
     await handler.setLoopOne(loopOne);
 
     if (autoPlay) {
@@ -2876,7 +2911,7 @@ String _trackPlaylistLabel(AppLogic logic, TrackRow track) {
       .where((name) => name.isNotEmpty)
       .toList();
 
-  if (names.isEmpty) return 'Chưa có list';
+  if (names.isEmpty) return 'null';
   return names.join(' - ');
 }
 
@@ -2903,11 +2938,9 @@ class _HomePageState extends State<_HomePage> {
     final filteredItems = query.isEmpty
         ? items
         : items
-            .where((t) {
-              final listNames = _trackPlaylistLabel(widget.logic, t).toLowerCase();
-              return t.title.toLowerCase().contains(query) ||
-                  listNames.contains(query);
-            })
+            .where((t) =>
+                t.title.toLowerCase().contains(query) ||
+                _trackPlaylistLabel(widget.logic, t).toLowerCase().contains(query))
             .toList();
 
     return CustomScrollView(
@@ -3223,7 +3256,7 @@ class _HeroCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = logic.currentTrack;
     final title = t?.title ?? 'Chưa chọn bài';
-    final artist = t?.artist ?? '';
+    final artist = t == null ? '' : _trackPlaylistLabel(logic, t);
     final textSecondary = Color(
       logic.settings.themeConfig.colors['textSecondary'] ??
           Theme.of(context).textTheme.bodySmall?.color?.value ??
@@ -3669,11 +3702,7 @@ class _PlaylistsPageState extends State<_PlaylistsPage> {
       shape: Theme.of(context).bottomSheetTheme.shape,
       builder: (_) => isSpecial
           ? _FavoriteSegmentsSheet(logic: widget.logic)
-          : _PlaylistSheet(
-              logic: widget.logic,
-              playlistId: playlistId,
-              name: name,
-            ),
+          : _PlaylistSheet(logic: widget.logic, playlistId: playlistId, name: name),
     );
   }
 }
@@ -4477,7 +4506,7 @@ class _NowPlayingSheetState extends State<_NowPlayingSheet> {
     final track = logic.currentTrack;
 
     final title = track?.title ?? 'Chưa chọn bài';
-    final artist = track?.artist ?? '';
+    final artist = track == null ? '' : _trackPlaylistLabel(logic, track);
     final duration = logic.currentDuration;
     final playing = logic.handler.playbackState.value.playing;
 
