@@ -2868,6 +2868,18 @@ class _LiquidGlassRimPainter extends CustomPainter {
   }
 }
 
+String _trackPlaylistLabel(AppLogic logic, TrackRow track) {
+  final names = logic
+      .playlistsContaining(track.id)
+      .where((pl) => !pl.isSpecial)
+      .map((pl) => pl.name.trim())
+      .where((name) => name.isNotEmpty)
+      .toList();
+
+  if (names.isEmpty) return 'Chưa có list';
+  return names.join(' - ');
+}
+
 /// ===============================
 /// HOME (library) - STICKY HEROCARD + SEARCH BAR
 /// ===============================
@@ -2887,12 +2899,15 @@ class _HomePageState extends State<_HomePage> {
     final items = widget.logic.library;
     final currentId = widget.logic.currentTrack?.id;
 
-    final filteredItems = _searchQuery.isEmpty
+    final query = _searchQuery.trim().toLowerCase();
+    final filteredItems = query.isEmpty
         ? items
         : items
-            .where((t) =>
-                t.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-                t.artist.toLowerCase().contains(_searchQuery.toLowerCase()))
+            .where((t) {
+              final listNames = _trackPlaylistLabel(widget.logic, t).toLowerCase();
+              return t.title.toLowerCase().contains(query) ||
+                  listNames.contains(query);
+            })
             .toList();
 
     return CustomScrollView(
@@ -3013,7 +3028,7 @@ class _HomePageState extends State<_HomePage> {
                       leading: _CoverThumb(path: t.coverPath, title: t.title),
                       title: Text(t.title,
                           maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text(t.artist,
+                      subtitle: Text(_trackPlaylistLabel(widget.logic, t),
                           maxLines: 1, overflow: TextOverflow.ellipsis),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -3488,7 +3503,7 @@ class _FavoritesPage extends StatelessWidget {
                   leading: _CoverThumb(path: t.coverPath, title: t.title),
                   title: Text(t.title,
                       maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(t.artist,
+                  subtitle: Text(_trackPlaylistLabel(logic, t),
                       maxLines: 1, overflow: TextOverflow.ellipsis),
                   onTap: () async {
                     await logic.setCurrent(t.id, autoPlay: true);
@@ -3512,13 +3527,37 @@ class _FavoritesPage extends StatelessWidget {
   }
 }
 
-class _PlaylistsPage extends StatelessWidget {
+class _PlaylistsPage extends StatefulWidget {
   final AppLogic logic;
   const _PlaylistsPage({required this.logic});
 
   @override
+  State<_PlaylistsPage> createState() => _PlaylistsPageState();
+}
+
+class _PlaylistsPageState extends State<_PlaylistsPage> {
+  String _searchQuery = '';
+
+  @override
   Widget build(BuildContext context) {
-    final pls = logic.playlists;
+    final logic = widget.logic;
+    final query = _searchQuery.trim().toLowerCase();
+    final allPlaylists = logic.playlists;
+    final pls = query.isEmpty
+        ? allPlaylists
+        : allPlaylists.where((pl) {
+            final ids = logic.playlistItems[pl.id] ?? const <String>[];
+            final trackNames = ids
+                .map((id) => logic.library
+                    .where((t) => t.id == id)
+                    .map((t) => t.title)
+                    .join(' '))
+                .join(' ')
+                .toLowerCase();
+            return pl.name.toLowerCase().contains(query) ||
+                trackNames.contains(query);
+          }).toList();
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       children: [
@@ -3538,10 +3577,29 @@ class _PlaylistsPage extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 8),
-        if (pls.isEmpty)
+        TextField(
+          decoration: InputDecoration(
+            hintText: 'Tìm kiếm list hoặc tên file...',
+            prefixIcon: const Icon(Icons.search_rounded),
+            suffixIcon: _searchQuery.isNotEmpty
+                ? IconButton(
+                    icon: const Icon(Icons.clear_rounded),
+                    onPressed: () => setState(() => _searchQuery = ''),
+                  )
+                : null,
+          ),
+          onChanged: (value) => setState(() => _searchQuery = value),
+        ),
+        const SizedBox(height: 8),
+        if (allPlaylists.isEmpty)
           const Padding(
               padding: EdgeInsets.only(top: 24),
               child: Text('Chưa có playlist.')),
+        if (allPlaylists.isNotEmpty && pls.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 24),
+            child: Center(child: Text('Không tìm thấy "$_searchQuery"')),
+          ),
         ...pls.map((pl) {
           final ids = logic.playlistItems[pl.id] ?? const <String>[];
           final segmentCount =
@@ -3610,8 +3668,12 @@ class _PlaylistsPage extends StatelessWidget {
       backgroundColor: Theme.of(context).bottomSheetTheme.backgroundColor,
       shape: Theme.of(context).bottomSheetTheme.shape,
       builder: (_) => isSpecial
-          ? _FavoriteSegmentsSheet(logic: logic)
-          : _PlaylistSheet(logic: logic, playlistId: playlistId, name: name),
+          ? _FavoriteSegmentsSheet(logic: widget.logic)
+          : _PlaylistSheet(
+              logic: widget.logic,
+              playlistId: playlistId,
+              name: name,
+            ),
     );
   }
 }
@@ -3700,7 +3762,7 @@ class _PlaylistSheet extends StatelessWidget {
                         leading: _CoverThumb(path: t.coverPath, title: t.title),
                         title: Text(t.title,
                             maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Text(t.artist,
+                        subtitle: Text(_trackPlaylistLabel(logic, t),
                             maxLines: 1, overflow: TextOverflow.ellipsis),
                         onTap: () async {
                           await logic.playPlaylist(
