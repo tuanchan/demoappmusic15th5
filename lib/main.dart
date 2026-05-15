@@ -583,7 +583,6 @@ class AppLogic extends ChangeNotifier {
   final Map<String, List<String>> playlistItems = {}; // playlistId -> trackIds
   final List<FavoriteSegment> favoriteSegments = [];
   StreamSubscription<MediaItem?>? _mediaItemSub;
-  Timer? _dropFolderScanTimer;
   bool _isScanningDropFolders = false;
 
   static const Set<String> _reservedLibraryFolders = {
@@ -669,7 +668,6 @@ class AppLogic extends ChangeNotifier {
 
     // Restore without autoplay
     await _restorePlaybackStateWithoutAutoPlay();
-    _startAutoFolderScanner();
   }
 
   void _loadSettings() {
@@ -1044,11 +1042,8 @@ class AppLogic extends ChangeNotifier {
     await _scanDropFoldersAndAudio(reload: false);
   }
 
-  void _startAutoFolderScanner() {
-    _dropFolderScanTimer?.cancel();
-    _dropFolderScanTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
-      await _scanDropFoldersAndAudio();
-    });
+  Future<void> refreshFolderLibrary() async {
+    await _scanDropFoldersAndAudio();
   }
 
   Future<void> _scanDropFoldersAndAudio({bool reload = true}) async {
@@ -2148,7 +2143,6 @@ class AppLogic extends ChangeNotifier {
   @override
   void dispose() {
     _saveTimer?.cancel();
-    _dropFolderScanTimer?.cancel();
     _mediaItemSub?.cancel();
     handler.stop();
     _db?.close();
@@ -2170,22 +2164,33 @@ class AppRoot extends StatefulWidget {
   State<AppRoot> createState() => _AppRootState();
 }
 
-class _AppRootState extends State<AppRoot> {
+class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   int _tab = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.logic.addListener(_rebuild);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.logic.removeListener(_rebuild);
     super.dispose();
   }
 
-  void _rebuild() => setState(() {});
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      widget.logic.refreshFolderLibrary();
+    }
+  }
+
+  void _rebuild() {
+    if (mounted) setState(() {});
+  }
 
   ThemeData _buildTheme({required bool dark, required ThemeConfig cfg}) {
     final base = dark ? ThemeData.dark() : ThemeData.light();
@@ -3122,8 +3127,11 @@ class _HomePageState extends State<_HomePage> {
                 _trackPlaylistLabel(widget.logic, t).toLowerCase().contains(query))
             .toList();
 
-    return CustomScrollView(
-      slivers: [
+    return RefreshIndicator(
+      onRefresh: widget.logic.refreshFolderLibrary,
+      child: CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
         // SEARCH BAR
         SliverToBoxAdapter(
           child: Padding(
@@ -3280,6 +3288,7 @@ class _HomePageState extends State<_HomePage> {
           ),
         ),
       ],
+      ),
     );
   }
 
@@ -3686,10 +3695,13 @@ class _FavoritesPage extends StatelessWidget {
     final favTracks =
         logic.library.where((t) => logic.favorites.contains(t.id)).toList();
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      children: [
-        Text('Yêu thích', style: Theme.of(context).textTheme.titleLarge),
+    return RefreshIndicator(
+      onRefresh: logic.refreshFolderLibrary,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        children: [
+          Text('Yêu thích', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 8),
         if (favTracks.isEmpty)
           const Padding(
@@ -3724,7 +3736,8 @@ class _FavoritesPage extends StatelessWidget {
                 ),
               ),
             )),
-      ],
+        ],
+      ),
     );
   }
 
@@ -3770,10 +3783,13 @@ class _PlaylistsPageState extends State<_PlaylistsPage> {
                 trackNames.contains(query);
           }).toList();
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      children: [
-        Row(
+    return RefreshIndicator(
+      onRefresh: logic.refreshFolderLibrary,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        children: [
+          Row(
           children: [
             Expanded(
                 child: Text('Danh sách phát',
@@ -3849,7 +3865,8 @@ class _PlaylistsPageState extends State<_PlaylistsPage> {
             ),
           );
         }),
-      ],
+        ],
+      ),
     );
   }
 
